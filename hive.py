@@ -23,25 +23,33 @@ Tb = visitas.alias ('Tb')
 Tc = cobertura.alias ('Tc')
 
 from pyspark.sql import functions as F
+Ta = Ta.withColumn('cli_key', F.upper(F.col('cli_key')))
+Ta = Ta.withColumn('cli_clienteid', F.upper(F.col('cli_clienteid')))
+Tb = Tb.withColumn('vis_id_cliente', F.upper(F.col('vis_id_cliente')))
 
-reporte_anual = Tb.withColumn('vis_key',F.upper(F.concat(F.col('VIS_ID_CLIENTE'), F.lit(' '), F.col('VIS_RUTA'))))\
+
+reporte_anual = Tb.withColumn('vis_key',F.upper(F.concat(F.col('vis_id_cliente'), F.lit(' '), F.col('vis_ruta'))))\
                   .where( (F.col('vis_estatus')=='Registrada') &\
                   (F.col('vis_estatus_cliente') =='Activo'))
 Ra = reporte_anual.alias ('Ra')
 reporte_anual= Ra.join (Ta,[ F.upper(Ta.cli_key)== F.upper(Ra.vis_key), Ta.cli_ciclo == Ra.vis_ciclo], how='left')\
                   .select(F.col('vis_ciclo'),F.col('cli_distrito'),F.col('cli_linea'),F.col('cli_ruta'),F.col('cli_repre')\
-                  ,F.upper(F.col('cli_clienteid')),F.col('cli_estatus'),F.col('cli_tipo'),F.col('cli_frecuencia'))\
+                  ,F.col('cli_clienteid'),F.col('cli_estatus'),F.col('cli_tipo'),F.col('cli_frecuencia'))\
                   .groupBy('vis_ciclo','cli_distrito','cli_linea','cli_ruta','cli_repre','cli_clienteid','cli_estatus',\
                   'cli_tipo','cli_frecuencia').count()
 
 
-reporte_anual = reporte_anual.groupBy('cli_distrito','cli_linea','cli_ruta','cli_repre','cli_clienteid','cli_estatus',\
-                  'cli_tipo','cli_frecuencia').pivot('vis_ciclo').sum('count')
+reporte_anual = reporte_anual.groupBy('cli_distrito','cli_linea','cli_ruta','cli_repre','cli_clienteid','cli_estatus','cli_tipo','cli_frecuencia').pivot('vis_ciclo').sum('count')
 
 reporte_anual.select('cli_clienteid').where(F.col('vis_ciclo')=='201806').show()
-
+'''
 reporte_anual.select('cli_frecuencia','201806','201808').where((F.col('cli_ruta') == 'SYO-1206') & (F.col('cli_tipo') == 'MÉDICO') &\
                                                               (F.col('cli_clienteid') == 'AAAD94F3-395C-4AA2-8888-DE6B857EB204')).show()
 
 
+reporte_anual.select(Ra).where((F.col('cli_ruta') == 'SYO-1206') & (F.col('cli_tipo') == 'MÉDICO') &\
+                              (F.col('cli_clienteid') == 'AAAD94F3-395C-4AA2-8888-DE6B857EB204')).show()
+
+
 reporte_anual.select(F.upper(F.col('cli_clienteid'))).where(F.col('vis_ciclo')=='201806').show()
+'''
