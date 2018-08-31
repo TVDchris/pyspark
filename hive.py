@@ -6,11 +6,11 @@ sparkSession = (SparkSession.builder.appName('hive_connection').enableHiveSuppor
 sparkSession.sparkContext.setLogLevel("ERROR")
 
 #%% actualziar las tablas STAGE con respecto al ciclo
-#ciclo = '201808'
+ciclo = '201806'
 hive_command = sparkSession.sql('USE MEDIX')
-hive_command = sparkSession.sql('INSERT OVERWRITE TABLE stage_visitas SELECT * FROM EXT_TABLE_visitas')# WHERE vis_ciclo='+ciclo)
-hive_command = sparkSession.sql('INSERT OVERWRITE TABLE stage_cobertura SELECT * FROM EXT_TABLE_cobertura')# WHERE cob_ciclo='+ciclo)
-hive_command = sparkSession.sql('INSERT OVERWRITE TABLE stage_cliente_crm  SELECT * FROM EXT_TABLE_clientes_crm')# WHERE cli_ciclo='+ciclo)
+hive_command = sparkSession.sql('INSERT OVERWRITE TABLE stage_visitas SELECT * FROM EXT_TABLE_visitas WHERE vis_ciclo='+ciclo)
+hive_command = sparkSession.sql('INSERT OVERWRITE TABLE stage_cobertura SELECT * FROM EXT_TABLE_cobertura WHERE cob_ciclo='+ciclo)
+hive_command = sparkSession.sql('INSERT OVERWRITE TABLE stage_cliente_crm  SELECT * FROM EXT_TABLE_clientes_crm WHERE cli_ciclo='+ciclo)
 
 #%% crear stage_reporte_anual
 
@@ -23,6 +23,7 @@ Tb = visitas.alias ('Tb')
 Tc = cobertura.alias ('Tc')
 
 from pyspark.sql import functions as F
+
 Ta = Ta.withColumn('cli_key', F.upper(F.col('cli_key')))
 Ta = Ta.withColumn('cli_clienteid', F.upper(F.col('cli_clienteid')))
 Tb = Tb.withColumn('vis_id_cliente', F.upper(F.col('vis_id_cliente')))
@@ -37,19 +38,134 @@ reporte_anual= Ra.join (Ta,[ F.upper(Ta.cli_key)== F.upper(Ra.vis_key), Ta.cli_c
                   ,F.col('cli_clienteid'),F.col('cli_estatus'),F.col('cli_tipo'),F.col('cli_frecuencia'))\
                   .groupBy('vis_ciclo','cli_distrito','cli_linea','cli_ruta','cli_repre','cli_clienteid','cli_estatus',\
                   'cli_tipo','cli_frecuencia').count()
+reporte_anual = reporte_anual.groupBy('cli_distrito','cli_linea','cli_ruta','cli_repre','cli_clienteid','cli_estatus',\
+                                      'cli_tipo','cli_frecuencia')\
+                             .pivot('vis_ciclo').sum('count')
+Ra = reporte_anual.alias ('Ra')
+Ra = Ra.withColumn('cli_ciclo',F.lit(ciclo))
+#%% CIERRE DE CICLO
+
+cierre_ciclo = Ra.select('cli_ciclo','cli_tipo','cli_linea','cli_distrito','cli_ruta','cli_repre')\
+                 .where ( F.col('cli_tipo') == 'MÉDICO')\
+                 .dropDuplicates()
+cc = cierre_ciclo.alias('cc')
 
 
-reporte_anual = reporte_anual.groupBy('cli_distrito','cli_linea','cli_ruta','cli_repre','cli_clienteid','cli_estatus','cli_tipo','cli_frecuencia').pivot('vis_ciclo').sum('count')
+#%% territorio
+repres = sparkSession.sql('SELECT * FROM STAGE_REPRESENTANTES')
+a = cc.select('cli_ruta').join(repres, cc.cli_ruta== repres.rep_ruta,how='left').select(F.col('cli_ruta')\
+                         .alias('rep_ruta'),'rep_territorio')\
+                         .dropDuplicates()
+cierre_ciclo = cc.join(a, cc.cli_ruta == a.rep_ruta ,how='left').select('cc.*',F.col('rep_territorio').alias('territorio'))
+cc = cierre_ciclo.alias('cc')
+#%% plan_trabajo
+a = Ta.select('cli_ruta','cli_clienteid').filter((F.col('cli_estatus').isin(['ACTIVO','NUEVO'])) & \
+                                                 (F.col('cli_frecuencia') != 0) &\
+                                                 (F.col('cli_tipo') == ('MÉDICO')))\
+                                         .groupby('cli_ruta').count()
+cierre_ciclo = cc.join(a, cc.cli_ruta == a.cli_ruta ,how='left').select('cc.*',F.col('count').alias('plan_trabajo'))
+cc = cierre_ciclo.alias('cc')
+#%% medicos_visitas
+a = Ra.select('cli_ruta','cli_clienteid').filter((F.col('cli_estatus').isin(['ACTIVO','NUEVO'])) & \
+                                                 (F.col('cli_tipo') == ('MÉDICO')))\
+                                         .groupby('cli_ruta').count()
+cierre_ciclo = cc.join(a, cc.cli_ruta == a.cli_ruta ,how='left').select('cc.*',F.col('count').alias('medicos_visitados'))
+cc = cierre_ciclo.alias('cc')
 
-reporte_anual.select('cli_clienteid').where(F.col('vis_ciclo')=='201806').show()
-'''
-reporte_anual.select('cli_frecuencia','201806','201808').where((F.col('cli_ruta') == 'SYO-1206') & (F.col('cli_tipo') == 'MÉDICO') &\
-                                                              (F.col('cli_clienteid') == 'AAAD94F3-395C-4AA2-8888-DE6B857EB204')).show()
+#%% frecuencia 0
+a = Ra.select('cli_ruta','cli_clienteid').filter((F.col('cli_estatus').isin(['ACTIVO','NUEVO'])) & \
+                                                 (F.col('cli_tipo') == ('MÉDICO')) & \
+                                                 (F.col('cli_frecuencia') == 0) & \
+                                                 (F.col(ciclo) == 1))\
+                                         .groupby('cli_ruta').count()
+cierre_ciclo = cc.join(a, cc.cli_ruta == a.cli_ruta ,how='left').select('cc.*',F.col('count').alias('F0_1'))
+cc = cierre_ciclo.alias('cc')
+
+a = Ra.select('cli_ruta','cli_clienteid').filter((F.col('cli_estatus').isin(['ACTIVO','NUEVO'])) & \
+                                                 (F.col('cli_tipo') == ('MÉDICO')) & \
+                                                 (F.col('cli_frecuencia') == 0) & \
+                                                 (F.col(ciclo) == 2))\
+                                         .groupby('cli_ruta').count()
+cierre_ciclo = cc.join(a, cc.cli_ruta == a.cli_ruta ,how='left').select('cc.*',F.col('count').alias('F0_2'))
+cc = cierre_ciclo.alias('cc')
+
+a = Ra.select('cli_ruta','cli_clienteid').filter((F.col('cli_estatus').isin(['ACTIVO','NUEVO'])) & \
+                                                 (F.col('cli_tipo') == ('MÉDICO')) & \
+                                                 (F.col('cli_frecuencia') == 0) & \
+                                                 (F.col(ciclo) >= 3))\
+                                         .groupby('cli_ruta').count()
+cierre_ciclo = cc.join(a, cc.cli_ruta == a.cli_ruta ,how='left').select('cc.*',F.col('count').alias('F0_3'))
+cc = cierre_ciclo.alias('cc')
+
+#%% frecuencia 1
+a = Ra.select('cli_ruta','cli_clienteid').filter((F.col('cli_estatus').isin(['ACTIVO','NUEVO'])) & \
+                                                 (F.col('cli_tipo') == ('MÉDICO')) & \
+                                                 (F.col('cli_frecuencia') == 1) & \
+                                                 (F.col(ciclo) == 1))\
+                                         .groupby('cli_ruta').count()
+cierre_ciclo = cc.join(a, cc.cli_ruta == a.cli_ruta ,how='left').select('cc.*',F.col('count').alias('F1_1'))
+cc = cierre_ciclo.alias('cc')
+
+a = Ra.select('cli_ruta','cli_clienteid').filter((F.col('cli_estatus').isin(['ACTIVO','NUEVO'])) & \
+                                                 (F.col('cli_tipo') == ('MÉDICO')) & \
+                                                 (F.col('cli_frecuencia') == 1) & \
+                                                 (F.col(ciclo) == 2))\
+                                         .groupby('cli_ruta').count()
+cierre_ciclo = cc.join(a, cc.cli_ruta == a.cli_ruta ,how='left').select('cc.*',F.col('count').alias('F1_2'))
+cc = cierre_ciclo.alias('cc')
+
+a = Ra.select('cli_ruta','cli_clienteid').filter((F.col('cli_estatus').isin(['ACTIVO','NUEVO'])) & \
+                                                 (F.col('cli_tipo') == ('MÉDICO')) & \
+                                                 (F.col('cli_frecuencia') == 1) & \
+                                                 (F.col(ciclo) >= 3))\
+                                         .groupby('cli_ruta').count()
+cierre_ciclo = cc.join(a, cc.cli_ruta == a.cli_ruta ,how='left').select('cc.*',F.col('count').alias('F1_3'))
+cc = cierre_ciclo.alias('cc')
+
+#%% frecuencia 2
+a = Ra.select('cli_ruta','cli_clienteid').filter((F.col('cli_estatus').isin(['ACTIVO','NUEVO'])) & \
+                                                 (F.col('cli_tipo') == ('MÉDICO')) & \
+                                                 (F.col('cli_frecuencia') == 2) & \
+                                                 (F.col(ciclo) == 1))\
+                                         .groupby('cli_ruta').count()
+cierre_ciclo = cc.join(a, cc.cli_ruta == a.cli_ruta ,how='left').select('cc.*',F.col('count').alias('F2_1'))
+cc = cierre_ciclo.alias('cc')
+
+a = Ra.select('cli_ruta','cli_clienteid').filter((F.col('cli_estatus').isin(['ACTIVO','NUEVO'])) & \
+                                                 (F.col('cli_tipo') == ('MÉDICO')) & \
+                                                 (F.col('cli_frecuencia') == 2) & \
+                                                 (F.col(ciclo) == 2))\
+                                         .groupby('cli_ruta').count()
+cierre_ciclo = cc.join(a, cc.cli_ruta == a.cli_ruta ,how='left').select('cc.*',F.col('count').alias('F2_2'))
+cc = cierre_ciclo.alias('cc')
+
+a = Ra.select('cli_ruta','cli_clienteid').filter((F.col('cli_estatus').isin(['ACTIVO','NUEVO'])) & \
+                                                 (F.col('cli_tipo') == ('MÉDICO')) & \
+                                                 (F.col('cli_frecuencia') == 2) & \
+                                                 (F.col(ciclo) >= 3))\
+                                         .groupby('cli_ruta').count()
+cierre_ciclo = cc.join(a, cc.cli_ruta == a.cli_ruta ,how='left').select('cc.*',F.col('count').alias('F2_3'))
+cc = cierre_ciclo.alias('cc')
 
 
-reporte_anual.select(Ra).where((F.col('cli_ruta') == 'SYO-1206') & (F.col('cli_tipo') == 'MÉDICO') &\
-                              (F.col('cli_clienteid') == 'AAAD94F3-395C-4AA2-8888-DE6B857EB204')).show()
+#%% COBERTURA
+a = Tc.select('cob_ruta','cob_vis_registradas','cob_vis_objetivo','cob_vis_descontadas')\
+      .filter((F.col('cob_tipo_cliente') == ('médico')))
+cierre_ciclo = cc.join(a, cc.cli_ruta == a.cob_ruta ,how='left')\
+                 .select('cc.*',F.col('cob_vis_registradas').alias('visitas_reg'),\
+                               F.col('cob_vis_objetivo').alias('visitas_obj'),\
+                               F.col('cob_vis_descontadas').alias('visitas_desc'))
+cc = cierre_ciclo.alias('cc')
 
+#%%visitasacompañadas
+a = Tb.select('vis_ruta','vis_acomp').filter((F.col('vis_acomp').isin(['GERENTE REGIONAL','Acompañado por Gerente'])) & \
+                                                (F.col('vis_tipo_cliente') == ('médico')))\
+                                     .groupby('vis_ruta').count()
+cierre_ciclo = cc.join(a, cc.cli_ruta == a.vis_ruta ,how='left')\
+                 .select('cc.*',F.col('count').alias('visitas_acomp'))
+cierre_ciclo = cierre_ciclo.fillna(0,subset=['F0_1','F0_2','F0_3','F1_1','F1_2','F1_3','F2_1','F2_2','F2_3',\
+                                             'visitas_reg','visitas_obj','visitas_desc','visitas_acomp'])
+cc = cierre_ciclo.alias('cc')
 
-reporte_anual.select(F.upper(F.col('cli_clienteid'))).where(F.col('vis_ciclo')=='201806').show()
-'''
+hive_command = sparkSession.sql('DROP TABLE IF EXISTS STAGE_CIERRE_CICLO')
+cierre_ciclo.write.saveAsTable('STAGE_CIERRE_CICLO')
