@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from pyspark import SparkContext, SparkConf
 from pyspark.sql import SparkSession, HiveContext
 
@@ -174,7 +175,7 @@ cierre_ciclo = cierre_ciclo.withColumn('visitas_obj',cierre_ciclo['visitas_obj']
 cierre_ciclo = cierre_ciclo.withColumn('visitas_desc',cierre_ciclo['visitas_desc'].cast('Int'))
 cierre_ciclo = cierre_ciclo.withColumn('visitas_acomp',cierre_ciclo['visitas_acomp'].cast('Int'))
 
-cierre_ciclo = cierre_ciclo.withColumn('cli_ruta_nombre',(F.col('cli_ruta'), F.lit('/'), F.col('cli_repre')))
+cierre_ciclo = cierre_ciclo.withColumn('cli_ruta_nombre',(F.concat(F.col('cli_ruta'), F.lit('/'), F.col('cli_repre'))))
 cc = cierre_ciclo.alias('cc')
 
 hive_command = sparkSession.sql('DROP TABLE IF EXISTS STAGE_CIERRE_CICLO')
@@ -270,7 +271,7 @@ cierre_ciclo = cierre_ciclo.withColumn('visitas_obj',cierre_ciclo['visitas_obj']
 cierre_ciclo = cierre_ciclo.withColumn('visitas_desc',cierre_ciclo['visitas_desc'].cast('Int'))
 cierre_ciclo = cierre_ciclo.withColumn('visitas_acomp',cierre_ciclo['visitas_acomp'].cast('Int'))
 
-cierre_ciclo = cierre_ciclo.withColumn('cli_ruta_nombre',(F.col('cli_ruta'), F.lit('/'), F.col('cli_repre')))
+cierre_ciclo = cierre_ciclo.withColumn('cli_ruta_nombre',(F.concat(F.col('cli_ruta'), F.lit('/'), F.col('cli_repre'))))
 cierre_ciclo.write.mode('append').saveAsTable('STAGE_CIERRE_CICLO')
 
 #%%   ####################################################HOSPITAL#####################################################################################
@@ -361,7 +362,8 @@ cierre_ciclo = cierre_ciclo.withColumn('visitas_obj',cierre_ciclo['visitas_obj']
 cierre_ciclo = cierre_ciclo.withColumn('visitas_desc',cierre_ciclo['visitas_desc'].cast('Int'))
 cierre_ciclo = cierre_ciclo.withColumn('visitas_acomp',cierre_ciclo['visitas_acomp'].cast('Int'))
 
-cierre_ciclo = cierre_ciclo.withColumn('cli_ruta_nombre',(F.col('cli_ruta'), F.lit('/'), F.col('cli_repre')))
+cierre_ciclo = cierre_ciclo.withColumn('cli_ruta_nombre',(F.concat(F.col('cli_ruta'), F.lit('/'), F.col('cli_repre'))))
+
 cierre_ciclo.write.mode('append').saveAsTable('STAGE_CIERRE_CICLO')
 
 sparkSession.stop()
