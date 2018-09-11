@@ -4,7 +4,9 @@ from pyspark.sql import SparkSession, HiveContext
 from pyspark.sql import functions as F
 import pyspark.sql.types as T
 
-SparkContext.setSystemProperty("hive.metastore.uris", "thrift://129.158.75.14:1080")
+SparkContext.setSystemProperty("hive.metastore.uris", "thrift://bdcsceprod-bdcsce-1.compute-590737110.oraclecloud.internal:9083") ##nn1:9083
+
+#hive mestastore dir : /apps/hive/warehouse
 sparkSession = (SparkSession.builder.appName('hive_connection').enableHiveSupport().getOrCreate())
 sparkSession.sparkContext.setLogLevel("ERROR")
 
