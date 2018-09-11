@@ -4,7 +4,7 @@ from pyspark.sql import SparkSession, HiveContext
 from pyspark.sql import functions as F
 import pyspark.sql.types as T
 
-SparkContext.setSystemProperty("hive.metastore.uris", "thrift://nn1:9083")
+SparkContext.setSystemProperty("hive.metastore.uris", "thrift://129.158.75.14:1080")
 sparkSession = (SparkSession.builder.appName('hive_connection').enableHiveSupport().getOrCreate())
 sparkSession.sparkContext.setLogLevel("ERROR")
 
@@ -112,6 +112,9 @@ CUP = CUP.withColumn('CUP_PRODUCTO',F.when(CUP.CUP_PRODUCTO == 'ESPAVEN ALCALINO
                                       .when(CUP.CUP_PRODUCTO == 'TERFAMEX OD MDX', 'TERFAMEX OD (MDX)')\
                                       .otherwise(CUP.CUP_PRODUCTO))
 
+CUP = CUP.withColumn('CUP_ANO',CUP['CUP_ANO'].cast('Int'))
+CUP = CUP.withColumn('CUP_CDG_POSTAL',CUP['CUP_CDG_POSTAL'].cast('Int'))
+
 #%% DDD
 DDD = sparkSession.read.option('header','true').csv('hdfs:///user/oracle/medix/auditoria/DDD/unidades/ddd_rev_201805.csv')
 
@@ -127,47 +130,41 @@ DDD = DDD.withColumn('DDD_MES',DDD.DDD_MES.substr(0,3))
 DDD = DDD.withColumn('DDD_MERCADO',F.when(DDD.DDD_MERCADO=='MDO A08A ANOREXIGENICOS','MDO ANOREXIGENICOS')\
                                     .otherwise(DDD.DDD_MERCADO))
 
+DDD = DDD.withColumn('DDD_CDG_BRICK',DDD['DDD_CDG_BRICK'].cast('Int'))
+DDD = DDD.withColumn('DDD_ANO',DDD['DDD_ANO'].cast('Int'))
+DDD = DDD.withColumn('DDD_CANTIDAD',DDD['DDD_CANTIDAD'].cast('Int'))
+
 #%%  MERCADO MEDIBUTIN 
 linea='GAS'
-ctg= catalogo.select(catalogo.columns).filter(F.col('Linea') == linea)
-a = CUP.select('CUP_ANO','CUP_MES','CUP_CDG_POSTAL','CUP_POSICION','CUP_PRODUCTO','CUP_VALUE')\
-       .filter(F.col('CUP_MERCADO') == 'MDO MEDIBUTIN')\
+mercado= 'MDO MEDIBUTIN'
+ctg= catalogo.select(catalogo.columns).filter(F.col('Linea') == linea)\
+             .groupBy('Brick_num','Cdg_postal','Estado','Municipio','Ciudad','Linea','Ruta').count()
+cr = CUP.select('CUP_ANO','CUP_MES','CUP_CDG_POSTAL','CUP_MERCADO','CUP_PRODUCTO','CUP_POSICION','CUP_VALUE')\
+        .groupBy('CUP_ANO','CUP_MES','CUP_CDG_POSTAL','CUP_MERCADO','CUP_POSICION','CUP_PRODUCTO').sum('CUP_VALUE')\
+       .filter((F.col('CUP_MERCADO') == mercado ) )\
        .join(ctg, CUP.CUP_CDG_POSTAL == ctg.Cdg_postal, how = 'left')\
-       .select('Brick_num','Cdg_postal','Estado','Municipio','Ciudad','Colonia','Linea','Ruta',\
-               'CUP_ANO','CUP_MES','CUP_POSICION','CUP_PRODUCTO','CUP_VALUE')
+       .select('Brick_num','Cdg_postal','Estado','Municipio','Ciudad','Linea','Ruta',\
+               'CUP_ANO','CUP_MES','CUP_MERCADO','CUP_PRODUCTO','CUP_POSICION',F.col('sum(CUP_VALUE)').alias('CUP_VALUES'))
+cr = cr.withColumn('CUP_VALUES',cr['CUP_VALUES'].cast('Int'))
 
-b = a.select('Brick_num','Cdg_postal','Estado','Municipio','Ciudad','Colonia','Linea','Ruta',\
-              'CUP_ANO','CUP_MES','CUP_POSICION','CUP_PRODUCTO','CUP_VALUE')\
-             .groupby('Brick_num','Cdg_postal','Estado','Municipio','Ciudad','Colonia','Linea','Ruta',\
-              'CUP_ANO','CUP_MES','CUP_POSICION','CUP_PRODUCTO').sum()
+dr= DDD.select('DDD_CDG_BRICK','DDD_MERCADO','DDD_PRODUCTO_HOM',\
+               'DDD_TERRITORIO','DDD_ANO','DDD_MES','DDD_CANTIDAD')\
+       .groupBy('DDD_CDG_BRICK','DDD_MERCADO','DDD_PRODUCTO_HOM',\
+               'DDD_TERRITORIO','DDD_ANO','DDD_MES','DDD_CANTIDAD').count()\
+       .filter((F.col('DDD_MERCADO')== mercado))\
+       .groupBy('DDD_CDG_BRICK','DDD_MERCADO','DDD_PRODUCTO_HOM', \
+                'DDD_TERRITORIO','DDD_ANO','DDD_MES')\
+       .sum('DDD_CANTIDAD')
+dr = dr.withColumn('sum(DDD_CANTIDAD)',dr['sum(DDD_CANTIDAD)'].cast('Int'))
 
-## ESTA CONSULTA NO AGRUPA BIEN EL VALOR::: GENERA SUM PARA TODOS LOS CAMPOS INT
-## FALTRA COMPORBAR CONSULTA DE C
-## FALTA VERIFICAR Q COLUMNAS HAY DE DDD
+c = cr.join(dr, [cr.Brick_num ==dr.DDD_CDG_BRICK ,cr.CUP_PRODUCTO == dr.DDD_PRODUCTO_HOM ,\
+                 cr.CUP_ANO == dr.DDD_ANO , cr.CUP_MES == dr.DDD_MES ], how='left')\
+     .select('Brick_num','Cdg_postal','Estado','Municipio','Ciudad','Linea','Ruta',\
+              'CUP_ANO','CUP_MES','CUP_MERCADO',F.col('CUP_PRODUCTO').substr(-4,3).alias('Laboratorio'),\
+              'CUP_PRODUCTO','CUP_POSICION','CUP_VALUES',\
+              F.col('sum(DDD_CANTIDAD)').alias('DDD_TOTAL'))
 
-c = b.join(DDD, [b.Brick_num ==DDD.DDD_CDG_BRICK ,b.CUP_PRODUCTO == DDD.DDD_PRODUCTO_HOM ,\
-                 b.CUP_ANO == DDD.DDD_ANO , b.CUP_MES == DDD.DDD_MES ], how='left')\
-     .select('Brick_num','Cdg_postal','Estado','Municipio','Ciudad','Colonia','Linea','Ruta',\
-              'CUP_ANO','CUP_MES','CUP_POSICION','CUP_PRODUCTO',)
-
-Ct.select('Ct.*').filter(F.col('Linea')==linea).join(CUP,Ct.Brick_num ==  , how='left')\
-
-[CUP.]
-             .select('Brick_num','Cdg_postal','Estado','Municipio','Ciudad','Colonia','Linea','Ruta',\
-                     'CUP_ANO','CUP_MES','CUP_NOMBRE','CUP_MATRICULA','CUP_CATEGORIA','')
-             .filter((F.col('Linea') == 'GAS') & )
-             
-             
-             
-             (F.col('cli_estatus').isin(['ACTIVO','NUEVO'])) & \
-                                                 (F.col('cli_tipo') == ('MÉDICO')) & \
-                                                 (F.col('cli_frecuencia') == 1) & \
-                                                 (F.col(ciclo) == 2))\
-
-
-cierre_ciclo = cc.join(a, cc.cli_ruta == a.cli_ruta ,how='left').select('cc.*',F.col('count').alias('medicos_visitados'))
-cc = cierre_ciclo.alias('cc')
-
-
-
+hive_command = sparkSession.sql('DROP TABLE IF EXISTS STAGE_AUDITORIA_CUPDDD')
+c.coalesce(1).write.saveAsTable('STAGE_AUDITORIA_CUPDDD')
+sparkSession.stop()
 
